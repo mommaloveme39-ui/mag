@@ -143,47 +143,60 @@ async def handle_health(request):
     """Vital endpoint preventing Render deployment timeout failures."""
     return web.Response(text="Bot Status: Operational & Fully Compliant", status=200)
 
-async def main():
+async def on_startup(app_web):
+    """Executed automatically when the web application boots up."""
     if not TOKEN or not WEBHOOK_URL:
-        logger.error("Environment variables 'TELEGRAM_TOKEN' and 'WEBHOOK_URL' are required.")
-        return
+        logger.error("Environment variables 'TELEGRAM_TOKEN' and 'WEBHOOK_URL' are missing.")
+        raise ValueError("Missing critical environment setup.")
 
-    # Build python-telegram-bot application architecture
-    app = Application.builder().token(TOKEN).build()
+    # Initialize Bot Application Architecture
+    bot_app = Application.builder().token(TOKEN).build()
 
     # Route Assignments
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("browse", browse_moods))
-    app.add_handler(CommandHandler("about", start))
-    app.add_handler(CallbackQueryHandler(start, pattern="main_menu"))
-    app.add_handler(CallbackQueryHandler(handle_help, pattern="help_info"))
-    app.add_handler(CallbackQueryHandler(handle_about, pattern="about_info"))
-    app.add_handler(CallbackQueryHandler(browse_moods, pattern="browse_moods"))
-    app.add_handler(CallbackQueryHandler(list_tracks, pattern="mood_"))
-    app.add_handler(CallbackQueryHandler(track_details, pattern="track_"))
-    app.add_handler(CallbackQueryHandler(stream_mock, pattern="stream_mock"))
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CommandHandler("browse", browse_moods))
+    bot_app.add_handler(CommandHandler("about", start))
+    bot_app.add_handler(CallbackQueryHandler(start, pattern="main_menu"))
+    bot_app.add_handler(CallbackQueryHandler(handle_help, pattern="help_info"))
+    bot_app.add_handler(CallbackQueryHandler(handle_about, pattern="about_info"))
+    bot_app.add_handler(CallbackQueryHandler(browse_moods, pattern="browse_moods"))
+    bot_app.add_handler(CallbackQueryHandler(list_tracks, pattern="mood_"))
+    bot_app.add_handler(CallbackQueryHandler(track_details, pattern="track_"))
+    bot_app.add_handler(CallbackQueryHandler(stream_mock, pattern="stream_mock"))
 
-    # Explicit initialization required when combining app runners with external web-frameworks
-    await app.initialize()
-    await app.start()
+    await bot_app.initialize()
+    await bot_app.start()
     
-    # Configure precise Telegram endpoints
-    await app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    # Establish precise webhook route link with Telegram API servers
+    await bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    
+    # Save bot instance to reference within requests
+    app_web['bot_app'] = bot_app
+    logger.info("Telegram Bot architecture successfully linked & operational.")
 
-    # Construct the simultaneous aiohttp web wrapper
+async def on_cleanup(app_web):
+    """Ensures clean task closure during server reloads or stops."""
+    bot_app = app_web.get('bot_app')
+    if bot_app:
+        logger.info("Executing clean shutdown sequencing...")
+        await bot_app.stop()
+        await bot_app.shutdown()
+
+def main():
+    # Setup standard web server container mapping
     web_app = web.Application()
-    web_app['bot_app'] = app
+    
+    # Bind lifecycles
+    web_app.on_startup.append(on_startup)
+    web_app.on_cleanup.append(on_cleanup)
+    
+    # Register paths
     web_app.router.add_post('/webhook', handle_webhook)
     web_app.router.add_get('/', handle_health)
     web_app.router.add_get('/health', handle_health)
 
-    runner = web.AppRunner(web_app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    
-    logger.info(f"WebServer established dynamically on port {PORT}")
-    await site.start()
+    # Run blocking app handler loop (Perfect for Render environment retention)
+    web.run_app(web_app, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
